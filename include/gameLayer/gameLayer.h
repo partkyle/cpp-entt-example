@@ -3,12 +3,13 @@
 
 bool initGame();
 bool gameLogic(float deltaTime);
+void createRectangle();
 void closeGame();
 
 namespace platform
 {
-	///sets the mouse pos relative to the window's drawing area
-	void setRelMousePosition(int x, int y);
+    /// sets the mouse pos relative to the window's drawing area
+    void setRelMousePosition(int x, int y);
 
 	bool isFullScreen();
 	void setFullScreen(bool f);
@@ -38,6 +39,4 @@ namespace platform
 	bool writeEntireFile(const char *name, void *buffer, size_t size);
 	bool readEntireFile(const char *name, void *buffer, size_t size);
 
-
 };
-

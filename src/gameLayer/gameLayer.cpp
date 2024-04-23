@@ -11,6 +11,8 @@
 #include <gl2d/gl2d.h>
 #include <platformTools.h>
 
+#include <entt/entt.hpp>
+
 #include "board.h"
 #include "game.h"
 
@@ -18,21 +20,56 @@ const int BOARD_WIDTH = 8;
 const int BOARD_HEIGHT = 8;
 const int BOARD_SIZE = BOARD_WIDTH * BOARD_HEIGHT;
 
+struct position
+{
+	float x;
+	float y;
+};
+
+struct velocity
+{
+	float dx;
+	float dy;
+};
+
+struct rectsize
+{
+	float w;
+	float h;
+};
+
+struct lifetime
+{
+	float t;
+};
+
+struct expiration
+{
+	float t;
+};
+
 struct GameData
 {
-	int padding = 1;
 
-	Board target;
-	Board ocean;
+	entt::registry registry;
 
-	Player players[2];
-	int currentPlayer;
+	int spawnCount = 100;
+	position defaultPosition = {0, 0};
+	velocity defaultVelocity = {-100, 100};
+	float fadeSpeed = 1.0;
+	bool randomizeVelocity = true;
+	bool useMousePosition = false;
 
-	int winner = -1;
-	glm::ivec2 textPos = {0,0};
-	float textSize = 1.5f;
-	float accTextSize = 0;
 } gameData;
+
+
+const int MAX_PERFORMANCE_SLOTS = 1000;
+struct PerformanceData
+{
+	float deltaTime[MAX_PERFORMANCE_SLOTS];
+	float fps[MAX_PERFORMANCE_SLOTS];
+	int idx = 0;
+} perfData;
 
 gl2d::Renderer2D renderer;
 
@@ -47,20 +84,9 @@ bool initGame()
 	// loading the saved data. Loading an entire structure like this makes savind game data very easy.
 	// platform::readEntireFile(RESOURCES_PATH "gameData.data", &gameData, sizeof(GameData));
 
-	gameData.target = Board{{BOARD_WIDTH, BOARD_HEIGHT}, {0, 0, 200, 200}, 1, Colors_Gray};
-	gameData.ocean = Board{{BOARD_WIDTH, BOARD_HEIGHT}, {0, 200, 200, 200}, 1, Colors_Green};
-
-	gameData.players[0].shipCount = 0;
-	gameData.players[0].addShip(Ship{{0, 0, 4, 0}, 4});
-	gameData.players[0].addShip(Ship{{0, 4, 0, 3}, 3});
-
-	gameData.players[1].shipCount = 0;
-	gameData.players[1].addShip(Ship{{0, 0, 0, 4}, 4});
-	gameData.players[1].addShip(Ship{{4, 4, 3, 0}, 3});
-
-	gameData.currentPlayer = 0;
-
 	font = gl2d::Font(RESOURCES_PATH "press-start-2p.ttf");
+
+	gameData.defaultPosition = {float(platform::getFrameBufferSizeX()) / 2, float(platform::getFrameBufferSizeY()) / 2};
 
 	return true;
 }
@@ -70,6 +96,92 @@ bool initGame()
 // OR THE INSTRUCTION IN THE CMAKE FILE.
 // YOU HAVE TO CHANGE A FLAG IN THE CMAKE SO THAT RESOURCES_PATH POINTS TO RELATIVE PATHS
 // BECAUSE OF SOME CMAKE PROGBLMS, RESOURCES_PATH IS SET TO BE ABSOLUTE DURING PRODUCTION FOR MAKING IT EASIER.
+
+float randf()
+{
+	return (float(rand()) / float(RAND_MAX));
+}
+
+float lerp(float lo, float hi, float p)
+{
+	return lo + (hi - lo) * p;
+}
+
+float randf_range(float lo, float hi)
+{
+	return lerp(lo, hi, randf());
+}
+
+
+void createRectangle(entt::registry &registry, position defaultPostiion, velocity vel, bool randomizeVelocity)
+{
+	const auto entity = registry.create();
+	registry.emplace<position>(entity, defaultPostiion.x, defaultPostiion.y);
+	if (randomizeVelocity)
+	{
+		glm::vec2 v = {randf_range(-1, 1), randf_range(-1, 1)};
+		v = glm::normalize(v);
+		v *= randf_range(vel.dx, vel.dy);
+		registry.emplace<velocity>(entity, v.x, v.y);
+	}
+	else
+	{
+		registry.emplace<velocity>(entity, vel.dx, vel.dy);
+	}
+	registry.emplace<rectsize>(entity, 10.0f, 10.0f);
+	registry.emplace<glm::vec4>(entity, randf(), randf(), randf(), 1.0f);
+
+	registry.emplace<lifetime>(entity);
+	registry.emplace<expiration>(entity, 2.0f);
+}
+
+void update(entt::registry &registry, float deltaTime)
+{
+	auto view = registry.view<position, velocity>();
+
+	for (auto [entity, pos, vel] : view.each())
+	{
+		pos.x += vel.dx * deltaTime;
+		pos.y += vel.dy * deltaTime;
+	}
+}
+
+void updateLifetime(entt::registry &registry, float deltaTime)
+{
+	auto view = registry.view<lifetime>();
+
+	for (auto [entity, life] : view.each())
+	{
+		life.t += deltaTime;
+	}
+}
+
+void cullLifetime(entt::registry &registry, float fadeSpeed, float deltaTime)
+{
+	auto view = registry.view<const lifetime, const expiration, glm::vec4>();
+
+	for (auto [entity, life, expiry, color] : view.each())
+	{
+		if (life.t >= expiry.t)
+		{
+			color.a -= fadeSpeed * deltaTime;
+			if (color.a <= 0)
+			{
+				registry.destroy(entity);
+			}
+		}
+	}
+}
+
+void draw(entt::registry &registry)
+{
+	auto view = registry.view<const position, const rectsize, const glm::vec4>();
+
+	for (auto [entity, pos, s, color] : view.each())
+	{
+		renderer.renderRectangle(gl2d::Rect{pos.x, pos.y, s.w, s.h}, color);
+	}
+}
 
 bool gameLogic(float deltaTime)
 {
@@ -85,121 +197,46 @@ bool gameLogic(float deltaTime)
 	renderer.updateWindowMetrics(w, h);
 #pragma endregion
 
+	perfData.deltaTime[perfData.idx] = deltaTime;
+	perfData.fps[perfData.idx] = 1 / deltaTime;
+	perfData.idx = (perfData.idx = (perfData.idx + 1) % MAX_PERFORMANCE_SLOTS);
+
 	if (platform::isButtonPressedOn(platform::Button::Escape))
 	{
 		return false;
 	}
 
-	int currentPlayer = gameData.currentPlayer;
-	int otherPlayer = (gameData.currentPlayer + 1) % 2;
+	ImGui::Begin("Debug");
+	ImGui::LabelText("deltaTime", "%0.4fms", deltaTime * 1000);
+	ImGui::LabelText("fps", "%0.0f", 1 / deltaTime);
+	ImGui::LabelText("entities", "%d", gameData.registry.view<position>().size());
+	ImGui::DragInt("spawnCount", &gameData.spawnCount, 1, 1, 100);
+	ImGui::Checkbox("useMousePosition", &gameData.useMousePosition);
+	if (gameData.useMousePosition) {
+		gameData.defaultPosition.x = float(platform::getRelMousePosition().x);
+		gameData.defaultPosition.y = float(platform::getRelMousePosition().y);
+	}
+	ImGui::DragFloat2("position", (float *)&gameData.defaultPosition, 1, 0, max(w, h));
+	ImGui::DragFloat2("velocity", (float *)&gameData.defaultVelocity, 1, -100, 100);
+	ImGui::DragFloat("fadeSpeed", &gameData.fadeSpeed, 1, 0, 100);
+	ImGui::Checkbox("randomize", &gameData.randomizeVelocity);
 
-	if (platform::isLMousePressed())
+	ImGui::PlotLines("deltaTime", perfData.deltaTime, MAX_PERFORMANCE_SLOTS, perfData.idx - 1);
+	ImGui::PlotLines("fps", perfData.fps, MAX_PERFORMANCE_SLOTS, perfData.idx - 1);
+
+	if (ImGui::Button("create rectangle", ImVec2{0, 32}) || platform::isButtonHeld(platform::Button::Space))
 	{
-		glm::ivec2 coords;
-		if (gameData.target.getRowColFromMousePosition(platform::getRelMousePosition(), &coords))
+		for (int i = 0; i < gameData.spawnCount; i++)
 		{
-			if (gameData.players[currentPlayer].hits[std::make_pair(coords.x, coords.y)] == 0)
-			{
-				int result = gameData.players[otherPlayer].tryHit(coords);
-				gameData.players[currentPlayer].hits[std::make_pair(coords.x, coords.y)] = result;
-				if (result & TARGET_SINK)
-				{
-					gameData.players[currentPlayer].sinkCount++;
-					if (gameData.players[currentPlayer].sinkCount >= gameData.players[otherPlayer].shipCount)
-					{
-						gameData.winner = currentPlayer;
-					}
-				}
-
-				gameData.currentPlayer = (gameData.currentPlayer + 1) % 2;
-			}
+			createRectangle(gameData.registry, gameData.defaultPosition, gameData.defaultVelocity, gameData.randomizeVelocity);
 		}
 	}
-
-	ImGui::Begin("Debug");
-	ImGui::Text("current player: %d", gameData.currentPlayer);
-
-	ImGui::Text("Player 0 Map");
-	for (const auto &[key, value] : gameData.players[0].hits)
-	{
-		ImGui::Text("[%d,%d] = %d\n", key.first, key.second, value);
-	}
-
-	ImGui::Text("Player 1 Map");
-	for (const auto &[key, value] : gameData.players[1].hits)
-	{
-		ImGui::Text("[%d,%d] = %d\n", key.first, key.second, value);
-	}
-
-	ImGui::DragInt("padding", &gameData.target.padding, 1, 0, min(w, h));
-	ImGui::DragFloat("textPos", &gameData.textSize, 1, 0, 100);
-	ImGui::DragInt2("textPos", (int *)&gameData.textPos, 1, 0, max(w, h));
-	ImGui::DragInt4("target board rect", (int *)&gameData.target.bounds, 1, 0, max(w, h));
-	ImGui::DragInt4("ocean board rect", (int *)&gameData.ocean.bounds, 1, 0, max(w, h));
 	ImGui::End();
 
-	Board *boards[] = {&gameData.target, &gameData.ocean};
-
-	for (int i = 0; i < 2; i++)
-	{
-		Board *board = boards[i];
-
-		for (int row = 0; row < board->boardSize.y; row++)
-		{
-			for (int col = 0; col < board->boardSize.x; col++)
-			{
-				glm::vec4 color = board->color;
-				if (i == 0)
-				{
-					auto key = std::make_pair(col, row);
-					if (gameData.players[currentPlayer].hits.find(key) != gameData.players[currentPlayer].hits.end())
-					{
-						int hitResult = gameData.players[currentPlayer].hits[key];
-						if (hitResult & TARGET_MISS)
-						{
-							color = Colors_White;
-						}
-						else if (hitResult & TARGET_HIT)
-						{
-							color = Colors_Red;
-						}
-					}
-				}
-
-				renderer.renderRectangle(board->cellPosToRect(col, row), color);
-			}
-		}
-	}
-
-	for (int i = 0; i < gameData.players[currentPlayer].shipCount; i++)
-	{
-		auto ship = gameData.players[currentPlayer].ships[i];
-		for (int j = ship.position.x; j < ship.position.x + ship.position.z; j++)
-		{
-			renderer.renderRectangle(gameData.ocean.cellPosToRect(j, ship.position.y), Colors_Yellow);
-		}
-		for (int j = ship.position.y; j < ship.position.y + ship.position.w; j++)
-		{
-			renderer.renderRectangle(gameData.ocean.cellPosToRect(ship.position.x, j), Colors_Yellow);
-		}
-	}
-
-	if (gameData.winner == -1)
-	{
-		glm::ivec4 rect;
-		if (gameData.target.getCellRectFromMousePosition(platform::getRelMousePosition(), &rect))
-		{
-			renderer.renderRectangle(rect, Colors_Blue);
-		}
-	}
-	else
-	{
-		char banner[80];
-		sprintf(banner, "player %d wins!", gameData.winner);
-		gameData.accTextSize += deltaTime;
-		float textSize = .45 + (.85 - .45) * (sin(gameData.accTextSize) * 0.5 + 1);
-		renderer.renderText({w/2, h/2}, banner, font, Colors_White, textSize);
-	}
+	update(gameData.registry, deltaTime);
+	updateLifetime(gameData.registry, deltaTime);
+	cullLifetime(gameData.registry, gameData.fadeSpeed, deltaTime);
+	draw(gameData.registry);
 
 	renderer.flush();
 

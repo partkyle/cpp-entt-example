@@ -46,6 +46,7 @@ add_subdirectory(thirdparty/profilerLib)		#profiling, just a simpe library for m
 add_subdirectory(thirdparty/gl2d)				#2D rendering library
 add_subdirectory(thirdparty/glui)				#ui library, usefull for making game menus
 
+add_subdirectory(thirdparty/entt)
 
 # MY_SOURCES is defined to be a list of all the source files for my game 
 # DON'T ADD THE SOURCES BY HAND, they are already added with this macro
@@ -98,3 +99,5 @@ target_include_directories("${CMAKE_PROJECT_NAME}" PUBLIC "${CMAKE_CURRENT_SOURC
 #enet not working yet on linux for some reason
 target_link_libraries("${CMAKE_PROJECT_NAME}" PRIVATE glm glfw 
 	glad stb_image stb_truetype gl2d raudio imgui safeSave profilerLib glui)
+
+target_link_libraries("${CMAKE_PROJECT_NAME}" PRIVATE EnTT::EnTT)
